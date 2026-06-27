@@ -123,7 +123,6 @@ class AnalisadorSemantico:
         nova_classe = ClasseDescritor(nome, nome_mae)
         mae_descritor = self.tabela_classes[nome_mae]
         #to passando os atributso e metodos da classe mae para a classe filho
-        nova_classe.atributos = mae_descritor.atributos.copy()
         nova_classe.metodos = mae_descritor.metodos.copy()
         
         #Agora a gente começa a analisar realmente o que tem dentro da classe
