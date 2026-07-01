@@ -44,7 +44,8 @@ class GeradorBril:
         self._label_count = 0
         self._linhas: list[str] = []
         self.codigo: list[str] = []
-        self._tipo_var: dict[str, str] = {}
+        self._tipo_var: dict[str, str] = {}      # nome → tipo Bril (int/bool/ptr)
+        self._tipo_cool_var: dict[str, str] = {}  # nome → tipo Cool real (Calculadora, Animal...)
         self._classe_atual: str = ""
 
     # ── utilidades ──────────────────────────────────────────────────────────
@@ -99,6 +100,13 @@ class GeradorBril:
     def _gerar_classe(self, no_classe):
         # ("CLASSE", linha, nome, heranca, ("FEATURES", [...]))
         self._classe_atual = no_classe[2]
+        # Coleta atributos da classe para saber o tipo Cool de cada um
+        self._atributos_classe: dict[str, str] = {}
+        for feat in no_classe[4][1]:
+            if feat[0] == "ATRIBUTO":
+                nome_atr = feat[2]
+                tipo_atr = feat[3][1]
+                self._atributos_classe[nome_atr] = tipo_atr
         for feat in no_classe[4][1]:
             if feat[0] == "FUNÇÃO":
                 self._gerar_funcao(feat)
@@ -111,6 +119,11 @@ class GeradorBril:
         self._label_count = 0
         self._linhas      = []
         self._tipo_var    = {}
+        self._tipo_cool_var = {}
+        # Registra atributos da classe no escopo da função
+        for nome_atr, tipo_atr in getattr(self, "_atributos_classe", {}).items():
+            self._tipo_cool_var[nome_atr] = tipo_atr
+            self._tipo_var[nome_atr] = self._tipo_bril(tipo_atr)
 
         params   = no_params[1]
         tipo_ret = self._tipo_bril(no_tipo[1])
@@ -121,6 +134,7 @@ class GeradorBril:
             pnome = p[1]
             ptipo = self._tipo_bril(p[2][1])
             self._tipo_var[pnome] = ptipo
+            self._tipo_cool_var[pnome] = p[2][1]  # tipo Cool original
             partes_sig.append(f"{pnome}:{ptipo}")
 
         # brili exige @main como ponto de entrada (Main.main -> @main)
@@ -137,8 +151,11 @@ class GeradorBril:
 
         # No @main, imprime o resultado antes de retornar
         # (brili não exibe o valor de ret automaticamente — precisa de print)
+        # Só imprime se o resultado for int ou bool — ptr não tem sentido imprimir
         if nome_func == "main" and resultado:
-            self._emit(f"  print {resultado};")
+            tipo_resultado = self._tipo_var.get(resultado, "ptr")
+            if tipo_resultado in ("int", "bool"):
+                self._emit(f"  print {resultado};")
 
         if resultado:
             self._emit(f"  ret {resultado};")
@@ -297,6 +314,7 @@ class GeradorBril:
             tipo_cool = decl[3][1]
             tipo_bril = self._tipo_bril(tipo_cool)
             self._tipo_var[nome_var] = tipo_bril
+            self._tipo_cool_var[nome_var] = tipo_cool  # tipo Cool original
 
             if len(decl) == 5:
                 # tem valor inicial — ("VALOR", expr) está em decl[4]
@@ -379,29 +397,32 @@ class GeradorBril:
         args_vars   = [self._gerar_expr(a) for a in args]
 
         if nome_metodo == "out_string":
-            self._emit(f"  # out_string({args_vars[0] if args_vars else ''})")
-            if args_vars:
-                self._emit(f"  call @print_str {args_vars[0]};")
+            # Bril não suporta strings nativamente — ignoramos silenciosamente
+            self._emit(f"  # out_string ignorado (Bril não suporta strings)")
             t = self._novo_temp("ptr")
             self._emit(f"  {t}: ptr = const 0;")
             return t
 
         if nome_metodo == "out_int":
-            self._emit(f"  # out_int({args_vars[0] if args_vars else ''})")
+            # Bril tem print nativo para inteiros
             if args_vars:
-                self._emit(f"  call @print_int {args_vars[0]};")
+                self._emit(f"  print {args_vars[0]};")
             t = self._novo_temp("ptr")
             self._emit(f"  {t}: ptr = const 0;")
             return t
 
         if nome_metodo == "in_int":
+            # Bril não suporta leitura de input — retorna 0
+            self._emit(f"  # in_int não suportado em Bril — retorna 0")
             t = self._novo_temp("int")
-            self._emit(f"  {t}: int = call @read_int;")
+            self._emit(f"  {t}: int = const 0;")
             return t
 
         if nome_metodo == "in_string":
+            # Bril não suporta leitura de string — retorna ptr nulo
+            self._emit(f"  # in_string não suportado em Bril — retorna ptr nulo")
             t = self._novo_temp("ptr")
-            self._emit(f"  {t}: ptr = call @read_str;")
+            self._emit(f"  {t}: ptr = const 0;")
             return t
 
         if self._classe_atual == "Main" and nome_metodo == "main":
@@ -421,7 +442,13 @@ class GeradorBril:
             nome_metodo = no[4][1]
             args        = no[5][1]
         else:
-            classe_alvo = self._classe_atual
+            # Descobre a classe real do objeto pelo tipo Cool da variável
+            no_obj = no[2][1]
+            if no_obj[0] == "VARIAVEL":
+                nome_obj = no_obj[2]
+                classe_alvo = self._tipo_cool_var.get(nome_obj, self._classe_atual)
+            else:
+                classe_alvo = self._classe_atual
             nome_metodo = no[3][1]
             args        = no[4][1]
 
@@ -432,7 +459,7 @@ class GeradorBril:
                  ("PARÂMETROS", args))
             )
 
-        args_vars = [obj_var] + [self._gerar_expr(a) for a in args]
+        args_vars = [self._gerar_expr(a) for a in args]
         nome_func = f"{classe_alvo}_{nome_metodo}"
         return self._emitir_call(nome_func, args_vars, "int")
 

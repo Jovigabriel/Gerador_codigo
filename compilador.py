@@ -40,6 +40,115 @@ from semantico import AnalisadorSemantico
 from gerador import GeradorBril
 
 
+
+
+def _limpar_bril(codigo: str) -> str:
+    """
+    Remove da versão completa tudo que não é instrução Bril real:
+      - Linhas que são só comentário (#)
+      - Linhas com placeholder de string (ptr = const 0  # placeholder)
+      - Linhas com aviso de recurso ignorado
+      - Linhas em branco extras
+    Mantém: assinaturas de função, labels, instruções reais, ret, print, br, jmp.
+    """
+    linhas_originais = codigo.split("\n")
+    linhas_limpas = []
+
+    ignorar_conteudo = [
+        "# placeholder string",
+        "# out_string ignorado",
+        "# in_string não suportado",
+        "# in_int não suportado",
+        "# isvoid simplificado",
+        "# while retorna void",
+        "# CASE não suportado",
+        "# nó desconhecido",
+        "# string literal",
+        "ignorado (Bril não suporta",
+    ]
+
+    for linha in linhas_originais:
+        stripped = linha.strip()
+
+        # Pula linhas que são só comentário
+        if stripped.startswith("#"):
+            continue
+
+        # Pula linhas que contêm marcadores de recurso não suportado
+        if any(marcador in linha for marcador in ignorar_conteudo):
+            continue
+
+        linhas_limpas.append(linha)
+
+    # Remove linhas em branco consecutivas (mantém no máximo uma)
+    resultado = []
+    linha_anterior_vazia = False
+    for linha in linhas_limpas:
+        if linha.strip() == "":
+            if not linha_anterior_vazia:
+                resultado.append(linha)
+            linha_anterior_vazia = True
+        else:
+            resultado.append(linha)
+            linha_anterior_vazia = False
+
+    return "\n".join(resultado)
+
+
+def _avisar_recursos_nao_suportados(arvore):
+    """
+    Percorre a AST e avisa sobre recursos que não são suportados pelo brili:
+      - Strings literais
+      - out_string / in_string
+      - Métodos de String (concat, length, substr)
+    """
+    avisos = []
+
+    def percorrer(no):
+        if no is None:
+            return
+        if isinstance(no, list):
+            for item in no:
+                percorrer(item)
+            return
+        if not isinstance(no, tuple):
+            return
+
+        tipo = no[0]
+
+        if tipo == "STRING":
+            avisos.append(f"  - String literal na linha {no[1]}: {repr(no[2])}")
+
+        elif tipo == "CHAMADA DE FUNÇÃO":
+            nome = no[2][1]
+            if nome in ("out_string", "in_string"):
+                avisos.append(f"  - Chamada a '{nome}' na linha {no[1]} (I/O de strings não suportado)")
+
+        elif tipo == "CHAMADA DE MÉTODO":
+            metodo = no[3][1]
+            if metodo in ("concat", "length", "substr"):
+                avisos.append(f"  - Método String.{metodo}() na linha {no[1]} (strings não suportadas)")
+
+        elif tipo == "CHAMADA ESTÁTICA":
+            metodo = no[4][1]
+            if metodo in ("concat", "length", "substr"):
+                avisos.append(f"  - Método String.{metodo}() na linha {no[1]} (strings não suportadas)")
+
+        # Continua percorrendo filhos
+        for filho in no[1:]:
+            percorrer(filho)
+
+    percorrer(arvore)
+
+    if avisos:
+        print("\n[AVISO] O programa usa recursos não suportados pelo Bril/brili:", file=sys.stderr)
+        print("  Strings e I/O de texto não existem no Bril core.", file=sys.stderr)
+        print("  As seguintes ocorrências serão ignoradas na execução:\n", file=sys.stderr)
+        for a in avisos:
+            print(a, file=sys.stderr)
+        print("", file=sys.stderr)
+
+
 def compilar(codigo_fonte: str, arquivo_saida: str = None, executar: bool = True):
 
     # ── Fase 1: Léxico + Sintático ────────────────────────────────────────────
@@ -54,6 +163,9 @@ def compilar(codigo_fonte: str, arquivo_saida: str = None, executar: bool = True
     AnalisadorSemantico(arvore).analisar()
     print("[SUCESSO] Sem erros semânticos.\n", file=sys.stderr)
 
+    # ── Fase 2.5: Aviso de recursos não suportados ───────────────────────────
+    _avisar_recursos_nao_suportados(arvore)
+
     # ── Fase 3: Geração de código Bril ───────────────────────────────────────
     print("[3/3] Gerando código Bril...", file=sys.stderr)
     gerador = GeradorBril(arvore)
@@ -62,26 +174,31 @@ def compilar(codigo_fonte: str, arquivo_saida: str = None, executar: bool = True
     print(codigo_bril)
 
     # ── Salvar em arquivo ─────────────────────────────────────────────────────
+    # Sempre salva em saida.bril (versão completa com comentários)
+    arquivo_fixo = "saida.bril"
+    with open(arquivo_fixo, "w", encoding="utf-8") as f:
+        f.write(codigo_bril)
+    print(f"[OK] Código Bril salvo em: {arquivo_fixo}", file=sys.stderr)
+
+    # Salva saida_limpa.bril (só instruções reais, sem comentários)
+    arquivo_limpo = "saida_limpa.bril"
+    codigo_limpo = _limpar_bril(codigo_bril)
+    with open(arquivo_limpo, "w", encoding="utf-8") as f:
+        f.write(codigo_limpo)
+    print(f"[OK] Código Bril limpo salvo em: {arquivo_limpo}", file=sys.stderr)
+
     if arquivo_saida:
         with open(arquivo_saida, "w", encoding="utf-8") as f:
             f.write(codigo_bril)
-        print(f"\n[OK] Código Bril salvo em: {arquivo_saida}", file=sys.stderr)
-        bril_path = arquivo_saida
-        deletar_temp = False
-    else:
-        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".bril",
-                                          delete=False, encoding="utf-8")
-        tmp.write(codigo_bril)
-        tmp.close()
-        bril_path = tmp.name
-        deletar_temp = True
+        print(f"[OK] Código Bril também salvo em: {arquivo_saida}", file=sys.stderr)
+
+    bril_path = arquivo_limpo   # executa a versão limpa
+    deletar_temp = False
 
     # ── Fase 4: Execução com brili ────────────────────────────────────────────
     if executar:
         _executar_bril(bril_path)
 
-    if deletar_temp:
-        os.unlink(bril_path)
 
 
 def _executar_bril(bril_path: str):
