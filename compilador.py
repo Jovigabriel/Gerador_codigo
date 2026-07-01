@@ -171,7 +171,7 @@ def compilar(codigo_fonte: str, arquivo_saida: str = None, executar: bool = True
     gerador = GeradorBril(arvore)
     gerador.gerar()
     codigo_bril = "\n".join(gerador.codigo)
-    print(codigo_bril)
+    # print(codigo_bril)
 
     # ── Salvar em arquivo ─────────────────────────────────────────────────────
     # Sempre salva em saida.bril (versão completa com comentários)

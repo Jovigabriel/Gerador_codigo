@@ -1,21 +1,17 @@
-@main(): ptr {
-  t1: int = const 11;
-  x: int = id t1;
-  t2: int = const 10;
-  t3: bool = lt x t2;
+@main(): int {
+  t1: int = const 10;
+  t2: int = const 5;
+  t3: bool = lt t1 t2;
   br t3 .lbl1 .lbl2;
 .lbl1:
-  t5: int = const 1;
-  print t5;
-  t6: ptr = const 0;
-  t4: ptr = id t6;
+  t5: int = const 0;
+  t4: int = id t5;
   jmp .lbl3;
 .lbl2:
-  t7: int = const 0;
-  print t7;
-  t8: ptr = const 0;
-  t4: ptr = id t8;
+  t6: int = const 1;
+  t4: int = id t6;
   jmp .lbl3;
 .lbl3:
+  print t4;
   ret t4;
 }
